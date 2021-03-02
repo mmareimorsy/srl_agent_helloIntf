@@ -1,0 +1,12 @@
+helloIntf:
+   path: /etc/opt/srlinux/appmgr/user_agents/
+   launch-command: ./helloIntf
+   search-command: ./helloIntf
+   wait-for-config: Yes
+   failure-threshold: 100
+   failure-action: wait=forever
+   yang-modules:
+       names:
+           - "helloIntf"
+       source-directories:
+           - "/etc/opt/srlinux/appmgr/user_agents/yang/"

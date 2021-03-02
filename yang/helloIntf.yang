@@ -1,0 +1,38 @@
+module intf_hello_agent {
+
+    yang-version "1.1";
+
+    // namespace
+    namespace "urn:srl_sdk/helloIntf";
+
+    prefix "helloIntf";
+
+    revision "2020-10-02" {
+        description "Initial revision of a hello world style of interface app";
+        reference "TBD";
+    }
+
+
+    grouping helloIntf-top {
+        description "Top level grouping for helloIntf agent";
+
+        container helloIntf {
+            presence "presence container";
+            description "Top level enclosing container for helloIntf sample app
+                         config and operational state data";
+
+            leaf action {
+                // enable or disable counting
+                type string;
+                description "enable or disable";
+                }
+            leaf admin-up-count{
+                type uint64;
+                config false;
+            }
+        }
+    }
+
+    // data definition statements
+    uses helloIntf-top;
+}
