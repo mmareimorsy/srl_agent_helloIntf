@@ -29,5 +29,30 @@ A:srldemo# info from state
 ```    
 The agent debug logs would be in /var/log/srlinux/stdout/
 
+Since the agents are also exposed via GNMI then you can use your typical gnmi operations to get & set the agent state; for example for a get operation 
 
+```
+== getRequest:
+path: <
+  elem: <
+    name: "helloIntf"
+  >
+>
+encoding: JSON_IETF
+
+== getResponse:
+notification: <
+  timestamp: 1615327857780189766
+  update: <
+    path: <
+      elem: <
+        name: "helloIntf:helloIntf"
+      >
+    >
+    val: <
+      json_ietf_val: "{\"admin-up-count\": \"5\"}"
+    >
+  >
+>
+```
 
