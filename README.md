@@ -27,7 +27,7 @@ A:srldemo# info
 A:srldemo# info from state
     admin-up-count 5
 ```    
-The agent debug logs would be in /var/log/srlinux/
+The agent debug logs would be in /var/log/srlinux/stdout/
 
 
 
