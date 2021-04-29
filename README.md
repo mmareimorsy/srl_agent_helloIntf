@@ -16,16 +16,31 @@ It is simply using a GRPC subscription to recieve notifications when there is an
 The agent will be installed under helloIntf path in the configuration
 
 ```
---{ candidate shared default }--[ helloIntf ]--
-A:srldemo# info
+--{ + candidate shared default }--[ helloIntf ]--
+A:leaf1# info
     action enable
     debug enable
 ```
 
 ```
 --{ candidate shared default }--[ helloIntf ]--
-A:srldemo# info from state
-    admin-up-count 5
+--{ + candidate shared default }--[ helloIntf ]--
+A:leaf1# info from state
+    action enable
+    debug enable
+    admin-up-count 3
+    interfaces {
+        interface ethernet-1/1 {
+            state admin-up
+        }
+        interface ethernet-1/2 {
+            state admin-up
+        }
+        interface mgmt0 {
+            state admin-up
+        }
+    }
+
 ```    
 The agent debug logs would be in /var/log/srlinux/stdout/
 
@@ -42,7 +57,7 @@ encoding: JSON_IETF
 
 == getResponse:
 notification: <
-  timestamp: 1615327857780189766
+  timestamp: 1619685289811545174
   update: <
     path: <
       elem: <
@@ -50,9 +65,10 @@ notification: <
       >
     >
     val: <
-      json_ietf_val: "{\"admin-up-count\": \"5\"}"
+      json_ietf_val: "{\"action\": \"enable\", \"debug\": \"enable\", \"admin-up-count\": \"3\", \"interfaces\": {\"interface\": [{\"name\": \"ethernet-1/1\", \"state\": \"admin-up\"}, {\"name\": \"ethernet-1/2\", \"state\": \"admin-up\"}, {\"name\": \"mgmt0\", \"state\": \"admin-up\"}]}}"
     >
   >
 >
+
 ```
 
