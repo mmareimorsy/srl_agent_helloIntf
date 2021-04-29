@@ -1,8 +1,8 @@
 // helloIntf v0.3
 // Simple NDK agent to count number of interfaces that are in an admin-up state
-// Tested against SRL 20.6.2
+// Tested against SRL 21.3
 // Original Idea from Rob Renisson for a similar example
-// Mohamed M. Morsy (mohamed.m.morsy@nokia.com)
+// Mohamed M. Morsy
 
 package main
 
@@ -13,7 +13,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -22,141 +21,107 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"helloIntf/ndkagent"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
 
-// Global variables used in this version which is not ideal
-// Potentially this could go out of sync from the state in IDB
-// Ideally initial state should be driven from querying current state in IDB
-var interfaces = make(map[string]uint32)
-var totalUp int = 0
-var agentState bool = false
-
-// struct used to follow the YANG model for ease of JSON Unmarshal
-type configModel struct {
-	Action string
-	Debug  string
-}
-
+// handleConfigNotification handles a config notification & update state as well for configured items
 func handleConfigNotification(notification *pb.Notification, agent *ndkagent.SrlAgent) {
-	// handles config notifications
-	// notification: This is a notification message as received from the system
-	// agent: This is a pointer to the the current agent in use
 	configPath := notification.GetConfig().Key.JsPath
 	agent.Logger.Debug("Got config ", configPath)
-	// Skip commit.end notification for now
-	if configPath == ".commit.end" {
+	if configPath == ".commit.end" { // Skip commit.end notification for now
 		agent.Logger.Debug("Skipping commit.end notification")
-		// handle relevant commits that belong to the agent
-	} else if strings.Contains(configPath, agent.Name) {
+	} else if strings.Contains(configPath, agent.Name) { // handle relevant commits that belong to the agent
 		agent.Logger.Debug("Relevant commit detected, working on it...")
-		// Commit should be either Create, Delete or Replace
-		operation := notification.GetConfig().Op
-		// Json content of the notification
-		content := notification.GetConfig().Data.GetJson()
+		operation := notification.GetConfig().Op           // Commit should be either Create, Delete or Replace
+		content := notification.GetConfig().Data.GetJson() // Json content of the notification
 		agent.Logger.Debug("Json data ", content)
 		// if commit is asking for delete skip for now
-		// Otherwise go ahead & handle the commit
 		if operation.String() == "Delete" {
 			agent.Logger.Info("Delete detected, To Be Done...")
 		} else {
 			agent.Logger.Debug("Create commit detected, Need to handle it")
-			agent.Logger.Debug(content)
-			commitContent := new(configModel)
-			json.Unmarshal([]byte(content), commitContent)
-			action := commitContent.Action
-			verbose := commitContent.Debug
+			agent.Logger.Info(content)
+			err := agent.YangModel.AgentConfig.PopulateConfig(content)
+			if err != nil {
+				agent.Logger.Info("Failed to populate new config", err)
+			}
+			runningConfig := agent.YangModel.AgentConfig.TopContainer.GetConfig()
+			action := agent.YangModel.AgentConfig.TopContainer.GetAction()
+			debug := agent.YangModel.AgentConfig.TopContainer.GetDebug()
 			agent.Logger.Info("action seen is ", action)
-			if action == "ACTION_enable" {
+			agent.YangModel.AgentState.TopContainer.UpdateAction(runningConfig)
+			if agent.YangModel.AgentConfig.TopContainer.GetAction() == 0 {
 				agent.Logger.Info("Turning on agent...")
-				agentState = true
-				updateCount(agent)
-				// if disable then triggers deleting state from IDB
 			} else {
 				agent.Logger.Info("Turning off agent...")
 				jsPath := "." + agent.Name
-				ndkagent.DelTelemetry(agent, jsPath)
-				agentState = false
+				agent.DelTelemetry(jsPath)
 			}
-			agent.Logger.Info("Value of verbose is ", verbose)
-			if verbose == "DEBUG_enable" {
+			agent.Logger.Info("Value of verbose is ", debug)
+			agent.YangModel.AgentState.TopContainer.UpdateDebug(runningConfig)
+			if debug == 0 {
 				agent.Logger.SetLevel(log.DebugLevel)
 				agent.Logger.Info("Turning on debugging mode...")
 			} else {
 				agent.Logger.SetLevel(log.InfoLevel)
 				agent.Logger.Info("Turning off debugging mode...")
 			}
+			agent.YangModel.AgentState.TopContainer.PopulateState(agent)
 		}
 	} else {
 		agent.Logger.Debug("Recieved irrelavant config, that shouldn't happen...")
 	}
 }
 
-func updateCount(agent *ndkagent.SrlAgent) {
-	// This builds the state that should be updated
-	// calls addTelemetry to actually talk to the IDB
-	// agent: This is a pointer to the the current agent in use
-	agent.Logger.Info("Updating state of the agent on the system via telemetry")
-	jsPath := "." + agent.Name
-	stateContent := map[string]map[string]string{}
-	stateContent["admin_up_count"] = map[string]string{}
-	stateContent["admin_up_count"]["value"] = strconv.Itoa(totalUp)
-	jsData, err := json.Marshal(stateContent)
-	if err != nil {
-		agent.Logger.Debug("Failed in marshalling of JSON data")
-	}
-	agent.Logger.Debug("JSON Marshal result is ", string(jsData))
-	ndkagent.AddTelemetry(agent, jsPath, string(jsData))
-}
-
+// handleIntfNotification handles state change of interfaces as they are streamed & update the interfacesList inside interfaces container
 func handleIntfNotification(notification *pb.Notification, agent *ndkagent.SrlAgent) {
-	// handle interface notifications
-	// notification: notification message as receieved from the system
-	// agent: This is a pointer to the the current agent in use
 	interfaceName := notification.GetIntf().Key.IfName
 	interfaceAdminState := notification.GetIntf().Data.AdminIsUp
 	agent.Logger.Info("Recieved notification for interface ", interfaceName, " with admin state ", interfaceAdminState)
 	// check if this interface was already known & with what state
-	prevState, found := interfaces[interfaceName]
+	prevState, found := agent.YangModel.AgentState.InterfacesContainer.InterfacesList[interfaceName]
 	if found {
 		// no change in state seen
-		if prevState == interfaceAdminState {
+		if prevState.Interface.GetState() == interfaceAdminState {
 			agent.Logger.Info("Interface ", interfaceName, " didn't change its state")
 			// moved from up to down state so should decrement count
-		} else if prevState == 1 && interfaceAdminState == 0 {
+		} else if prevState.Interface.GetState() == 1 && interfaceAdminState == 0 {
 			agent.Logger.Info("Interface ", interfaceName, " moved from up to down")
-			totalUp--
-			interfaces[interfaceName] = interfaceAdminState
+			prevState.Interface.SetState(interfaceAdminState)
+			agent.YangModel.AgentState.TopContainer.DecrementIntfCounter()
+			prevState.PopulateState(interfaceName, agent)
 			// moved from down to up so should incremenet count
 		} else {
 			agent.Logger.Info("Interface ", interfaceName, " moved from down to up")
-			totalUp++
-			interfaces[interfaceName] = interfaceAdminState
+			prevState.Interface.SetState(interfaceAdminState)
+			agent.YangModel.AgentState.TopContainer.IncrementIntfCounter()
+			prevState.PopulateState(interfaceName, agent)
 		}
 	} else {
 		// new interface not seen before so update count if it is admin-up
 		if interfaceAdminState == 1 {
 			agent.Logger.Info("Interface ", interfaceName, " is a new one in up state")
-			totalUp++
-			interfaces[interfaceName] = interfaceAdminState
+			newIntfElement := new(ndkagent.InterfaceElement)
+			newIntfElement.Interface = new(ndkagent.InterfaceState)
+			newIntfElement.Interface.SetState(interfaceAdminState)
+			agent.YangModel.AgentState.InterfacesContainer.InterfacesList[interfaceName] = newIntfElement
+			newIntfElement.PopulateState(interfaceName, agent)
+			agent.YangModel.AgentState.TopContainer.IncrementIntfCounter()
 		}
 	}
-	// update telemetry if the agent is configured as enable
-	if agentState {
-		updateCount(agent)
-	}
+	agent.YangModel.AgentState.TopContainer.PopulateState(agent)
 }
+
+// handleNotification handles streamed notifications based on their type
 func handleNotification(notification *pb.Notification, agent *ndkagent.SrlAgent) {
-	// Handle of config vs intf vs anything else
-	// notification: notification message as recieved from the system
-	// agent: pointer to the current agent in use
-	// Pretify JSON notification for logging only
 	prettyNot, err := json.MarshalIndent(notification, "", "    ")
 	if err != nil {
 		agent.Logger.Debug("Failed to Marshal notification")
 	}
 	agent.Logger.Debug(string(prettyNot))
+	agent.Logger.Debug(notification)
 	if notification.GetConfig() != nil {
 		handleConfigNotification(notification, agent)
 	} else if notification.GetIntf() != nil {
@@ -167,9 +132,8 @@ func handleNotification(notification *pb.Notification, agent *ndkagent.SrlAgent)
 	}
 }
 
+// start is where the agent registers with the system, subscribe to notifications & initializes config & state structs of the agent
 func start(agent *ndkagent.SrlAgent, wg *sync.WaitGroup) {
-	// Agent initial resgistration & trigger to notification subscription
-	// agent: pointer to the current agent in use
 	response, err := agent.Stub.AgentRegister(agent.Ctx, &pb.AgentRegistrationRequest{})
 	if err != nil {
 		agent.Logger.Debug("Failed to send agent resgistration request")
@@ -179,17 +143,21 @@ func start(agent *ndkagent.SrlAgent, wg *sync.WaitGroup) {
 	agent.Logger.Info("Agent", agent.Name, "resgistration status is", response.Status)
 	if response.Status.String() == "kSdkMgrFailed" {
 		agent.Logger.Debug("Failed to register ", agent.Name)
-		// os.Exit(-1)
 	}
-	// Getting app ID
-	agent.AppID = response.GetAppId()
+	agent.AppID = response.GetAppId() // Getting app ID
 	agent.Logger.Info("Agent ", agent.Name, " ID has been set to ", agent.AppID)
 
-	err = ndkagent.SubscribeNotifications(agent)
+	err = agent.SubscribeNotifications()
 	if err != nil {
 		agent.Logger.Debug("Failed to subscribe to notification stream...")
 	}
+	agent.Logger.Info("Subscribed to desired notifications")
 	defer wg.Done()
+
+	// Init config & state components
+	agent.YangModel.AgentConfig = ndkagent.InitConfig()
+	agent.YangModel.AgentState = ndkagent.InitState()
+
 	for {
 		streamResponse, err := agent.StreamClient.Recv()
 		if err == io.EOF {
@@ -206,11 +174,9 @@ func start(agent *ndkagent.SrlAgent, wg *sync.WaitGroup) {
 			handleNotification(notification, agent)
 		}
 	}
-	// updateCount(agent)
 }
 
 func main() {
-
 	// Create a new instance of srlAgent
 	agent := new(ndkagent.SrlAgent)
 	agent.Name = "helloIntf"
@@ -220,10 +186,10 @@ func main() {
 	signal.Notify(osSignals, syscall.SIGTERM, syscall.SIGQUIT)
 	wg := new(sync.WaitGroup)
 	wg.Add(1)
-	go ndkagent.ExitGracefully(osSignals, agent, wg)
+	go agent.ExitGracefully(osSignals, wg)
 
 	//setup stdout logging
-	ndkagent.LogSetup(agent)
+	agent.LogSetup()
 
 	// Setting up grpc channel
 	agent.Logger.Debug("Establishing grpc channel...")
@@ -246,7 +212,7 @@ func main() {
 	wg.Add(1)
 	go start(agent, wg)
 	wg.Add(1)
-	go ndkagent.KeepAlive(agent, wg, 10*time.Second)
+	go agent.KeepAlive(wg, 10*time.Second)
 	wg.Wait()
 	agent.Logger.Info("Terminating all here...")
 }

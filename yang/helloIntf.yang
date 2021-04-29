@@ -1,4 +1,4 @@
-module intf_hello_agent {
+module helloIntf {
 
     yang-version "1.1";
 
@@ -17,18 +17,51 @@ module intf_hello_agent {
         description "Top level grouping for helloIntf agent";
 
         container helloIntf {
-            presence "presence container";
+            // presence "presence container";
             description "Top level enclosing container for helloIntf sample app
                          config and operational state data";
 
             leaf action {
-                // enable or disable counting
-                type string;
-                description "enable or disable";
+                type enumeration{
+                    enum enable{
+                        description "enable agent to monitor admin-up interfaces";
+                        value 0;
+                    }
+                    enum disable{
+                        description "disable agent";
+                        value 1;
+                    }
                 }
+            }
+            leaf debug {
+                type enumeration{
+                    enum enable {
+                        description "enable debug";
+                        value 0;
+                    }
+                    enum disable {
+                        description "disable debug";
+                        value 1;
+                    }
+                }
+            }
             leaf admin-up-count{
                 type uint64;
                 config false;
+            }
+            container interfaces {
+                config false;
+                description "interface data from telemetry";
+                list interface {
+                    key name;
+                    config false;            
+                    leaf name {
+                        type string;
+                    } 
+                    leaf state {
+                        type string;
+                    }
+                }
             }
         }
     }

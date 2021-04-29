@@ -13,7 +13,7 @@ import (
 	pb "helloIntf/nokia.com/srlinux/sdk/protos"
 )
 
-// SrlAgent struct used to ease moving around the agent needed components around different functions in the code
+// SrlAgent struct used to ease moving around the agent needed components
 type SrlAgent struct {
 	AppID            uint32
 	Name             string
@@ -27,13 +27,16 @@ type SrlAgent struct {
 	StreamID         uint64
 	StreamClient     pb.SdkNotificationService_NotificationStreamClient
 	TelemetryStub    pb.SdkMgrTelemetryServiceClient
+	YangModel        ConfigAndState
+}
+
+type ConfigAndState struct {
+	AgentConfig *Config
+	AgentState  *State
 }
 
 // AddTelemetry will add or update state of agent on IDB
-// agent: This is a pointer to the the current agent in use
-// jsPath: string for the root key of the agent, usually that's the .agent_name
-// jsData: properly formatted JSON data to populate the updated state
-func AddTelemetry(agent *SrlAgent, jsPath string, jsData string) {
+func (agent *SrlAgent) AddTelemetry(jsPath string, jsData string) {
 	telemetryKey := &pb.TelemetryKey{
 		JsPath: jsPath,
 	}
@@ -53,12 +56,11 @@ func AddTelemetry(agent *SrlAgent, jsPath string, jsData string) {
 		agent.Logger.Debug("Failted to add Telemetry")
 	}
 	agent.Logger.Debug("Response for adding telemetry ", response.Status)
+	agent.Logger.Debug("Response for adding Telemetry ", response.ErrorStr)
 }
 
 // DelTelemetry will delete the current state of the agent, used when we disable the agent in CLI
-// agent: This is a pointer to the the current agent in use
-// jsPath: string for the root key of the agent, usually that's the .agent_name
-func DelTelemetry(agent *SrlAgent, jsPath string) {
+func (agent *SrlAgent) DelTelemetry(jsPath string) {
 	telemetryKey := &pb.TelemetryKey{
 		JsPath: jsPath,
 	}
@@ -73,9 +75,7 @@ func DelTelemetry(agent *SrlAgent, jsPath string) {
 }
 
 // Subscribe subscribes to notification topics as needed
-// agent: pointer to the current agent in use
-// topic: name of the topic to subscribe to, has to be one of the supported topics on the system
-func Subscribe(agent *SrlAgent, topic string) {
+func (agent *SrlAgent) Subscribe(topic string) {
 	agent.Logger.Debug("Subscribing for ", topic)
 	op := pb.NotificationRegisterRequest_AddSubscription
 	response := &pb.NotificationRegisterResponse{}
@@ -115,7 +115,13 @@ func Subscribe(agent *SrlAgent, topic string) {
 			SubscriptionTypes: &pb.NotificationRegisterRequest_Config{},
 		})
 	}
-
+	if topic == "app" {
+		response, err = agent.Stub.NotificationRegister(agent.Ctx, &pb.NotificationRegisterRequest{
+			StreamId:          agent.StreamID,
+			Op:                op,
+			SubscriptionTypes: &pb.NotificationRegisterRequest_Appid{},
+		})
+	}
 	if err != nil {
 		agent.Logger.Debug("Failed to subscribe for ", topic)
 	}
@@ -123,24 +129,22 @@ func Subscribe(agent *SrlAgent, topic string) {
 }
 
 // SubscribeNotifications create notifications stub & register for notifications
-// agent: pointer to the current agent in use
-func SubscribeNotifications(agent *SrlAgent) error {
+func (agent *SrlAgent) SubscribeNotifications() error {
 	notificationResponse, err := agent.Stub.NotificationRegister(agent.Ctx, &pb.NotificationRegisterRequest{})
 	if err != nil {
 		agent.Logger.Debug("Failed to resgister for notifications...")
-		// os.Exit(-1)
 	}
 	agent.Logger.Debug("Response for notifications register ", notificationResponse.Status)
-	// get stream ID
-	agent.StreamID = notificationResponse.StreamId
+	agent.StreamID = notificationResponse.StreamId // get stream ID
 	agent.Logger.Debug("Stream ID for notifications is ", agent.StreamID)
 
 	// do the actual subscribtion here
-	Subscribe(agent, "intf")
-	Subscribe(agent, "nw_inst")
-	Subscribe(agent, "lldp")
-	Subscribe(agent, "route")
-	Subscribe(agent, "cfg")
+	agent.Subscribe("intf")
+	agent.Subscribe("nw_inst")
+	agent.Subscribe("lldp")
+	agent.Subscribe("route")
+	agent.Subscribe("cfg")
+	agent.Subscribe("app")
 
 	// get a stream client for streaming notifications
 	agent.StreamClient, err = agent.NotificationStub.NotificationStream(agent.Ctx, &pb.NotificationStreamRequest{
@@ -155,9 +159,7 @@ func SubscribeNotifications(agent *SrlAgent) error {
 }
 
 // ExitGracefully go routine to handle kill signal
-// osSignals: a channel of data type os.Signal
-// agent: pointer to the current agent in use
-func ExitGracefully(osSignals chan os.Signal, agent *SrlAgent, wg *sync.WaitGroup) {
+func (agent *SrlAgent) ExitGracefully(osSignals chan os.Signal, wg *sync.WaitGroup) {
 	recievedSignal := <-osSignals
 	agent.Logger.Info("Kill signal detected ", recievedSignal.String())
 	agent.Ctx.Done()
@@ -172,10 +174,7 @@ func ExitGracefully(osSignals chan os.Signal, agent *SrlAgent, wg *sync.WaitGrou
 
 // KeepAlive used to send keepalive requests for agent liveliness
 // In case of sdk_mgr restarting the keepalives should detect that & restart the agent after 3 missed keepalives
-// agent: instance of SrlAgent
-// wg: waitGroup for the thread running the keepalives
-// keepAliveInterval: time.Duration for how frequent the keepalives should be (multiplier of 3 is hardcoded)
-func KeepAlive(agent *SrlAgent, wg *sync.WaitGroup, keepAliveInterval time.Duration) {
+func (agent *SrlAgent) KeepAlive(wg *sync.WaitGroup, keepAliveInterval time.Duration) {
 	defer wg.Done()
 	missedCounter := 0
 	for {
@@ -201,7 +200,7 @@ func KeepAlive(agent *SrlAgent, wg *sync.WaitGroup, keepAliveInterval time.Durat
 }
 
 // LogSetup setting up of logging to stdout directory
-func LogSetup(agent *SrlAgent) {
+func (agent *SrlAgent) LogSetup() {
 	// Handle stdout for logging
 	hostName, _ := os.Hostname()
 	stdoutDir := "/var/log/srlinux/stdout"
@@ -211,8 +210,6 @@ func LogSetup(agent *SrlAgent) {
 		os.MkdirAll(stdoutDir, 0760)
 	}
 	logWriter, err := os.OpenFile(logFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	// defer logWriter.Close()
-	// agent.Logger = log.New(logWriter, header, log.LstdFlags)
 	agent.Logger = log.New()
 	agent.Logger.SetOutput(logWriter)
 	agent.Logger.SetFormatter(&log.TextFormatter{
